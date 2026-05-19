@@ -42,6 +42,9 @@ let recording = false;
 let chunks: Float32Array[] = [];
 let proc: ScriptProcessorNode | null = null;
 
+// Frisch aufgenommener Take, der noch angehört und bestätigt/verworfen wird.
+let pending: { wav: Uint8Array; key: string; url: string } | null = null;
+
 function sanitize(id: string): string {
   return id.replace(/#/g, 's');
 }
@@ -94,10 +97,27 @@ function stopRec() {
   const ds = downsample(buf, srcRate, TARGET_SR);
   const wav = encodeWav16(ds, TARGET_SR);
 
-  const key = currentKey();
+  // Noch nicht speichern – erst anhören und bestätigen lassen.
+  const blob = new Blob([wav as BlobPart], { type: 'audio/wav' });
+  pending = { wav, key: currentKey(), url: URL.createObjectURL(blob) };
+  render();
+}
+
+function savePending() {
+  if (!pending) return;
+  const { wav, key } = pending;
   takeCounts[key] = (takeCounts[key] ?? 0) + 1;
   const take = String(takeCounts[key]).padStart(2, '0');
   recordings.push({ name: `${key}__t${take}.wav`, wav });
+  URL.revokeObjectURL(pending.url);
+  pending = null;
+  render();
+}
+
+function discardPending() {
+  if (!pending) return;
+  URL.revokeObjectURL(pending.url);
+  pending = null;
   render();
 }
 
@@ -320,6 +340,28 @@ function render() {
     ? `${germanName(ALL_NOTES[pitchIdx].id)} (${ALL_NOTES[pitchIdx].id})`
     : PATTERNS[rhythmIdx].name;
   const done = takeCounts[currentKey()] ?? 0;
+
+  if (pending) {
+    app.innerHTML = `
+      <div class="card">
+        <div class="idx">${idx + 1} / ${total}</div>
+        <div id="vf"></div>
+        <div class="title">${title}</div>
+        <p class="hint">Aufnahme anhören und entscheiden:</p>
+        <audio id="review" src="${pending.url}" controls autoplay
+               style="width:100%;margin:6px 0 14px"></audio>
+        <div class="nav">
+          <button id="discard" style="background:#dc2626">🗑 Verwerfen</button>
+          <button id="save" style="background:#16a34a">✅ Speichern</button>
+        </div>
+        <p class="hint">Verworfene Aufnahmen verbrauchen keine Take-Nummer.</p>
+      </div>`;
+    const $p = (id: string) => document.getElementById(id)!;
+    (mode === 'pitch' ? drawPitch : drawRhythm)(document.getElementById('vf')!);
+    $p('discard').onclick = discardPending;
+    $p('save').onclick = savePending;
+    return;
+  }
 
   app.innerHTML = `
     <div class="bar">
