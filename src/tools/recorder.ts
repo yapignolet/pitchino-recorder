@@ -305,7 +305,8 @@ function exportZip() {
   const blob = buildZip(recordings);
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `cello-takes-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.zip`;
+  const sha = __BUILD_VERSION__.split(' ')[0]; // "94d3909 (2026-05-20)" → "94d3909"
+  a.download = `cello-takes-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}__build-${sha}.zip`;
   document.body.appendChild(a);
   a.click();
   a.remove();
