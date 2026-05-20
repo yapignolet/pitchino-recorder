@@ -114,12 +114,14 @@ function stopRec() {
 
   const srcRate = ctx.sampleRate;
   let buf = flatten(chunks);
-  // Rhythmus braucht Platz für 4 s Vorzähler + bis ~4 s Pattern + Reserve;
-  // sonst kappt der Trim die letzten Beats. Pitch bleibt beim engen Default.
-  if (mode === 'rhythm') {
-    const maxLen = 4 * BEAT_SEC + patternDurationSec(PATTERNS[rhythmIdx]) + 2;
-    buf = trimSilence(buf, srcRate, maxLen, 1.0);
-  } else {
+  // Rhythmus: kein Trim. Die Dauer ist durch den Metronom-Callback bereits
+  // exakt begrenzt (4 × BEAT_SEC + Muster + 0,2 s Nachlauf). trimSilence
+  // ist hier kontraproduktiv: Countdown-Klicks verschieben den erkannten
+  // „first energetic frame", wodurch start in den Vorzähler rutscht und
+  // die ersten Cello-Noten weggeschnitten werden; MAX_LEN_SEC kappte früher
+  // zusätzlich die letzten Beats. Für Pitch bleibt der Trim erhalten
+  // (Harness misst die Anlauf-Stille als False-Positive-Region).
+  if (mode !== 'rhythm') {
     buf = trimSilence(buf, srcRate);
   }
   const ds = downsample(buf, srcRate, TARGET_SR);
