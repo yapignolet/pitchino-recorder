@@ -71,6 +71,23 @@ async function ensureMic(): Promise<boolean> {
   }
 }
 
+// iOS Safari routet Output über den leisen Empfänger-Lautsprecher, solange ein
+// aktiver Mic-Stream existiert (Play&Record-Audiosession). Wir geben das
+// Mikrofon nach jedem Take frei, damit Playback und Metronom des nächsten Takes
+// wieder über die lauten Hauptlautsprecher laufen. Nächste Aufnahme greift
+// den Stream einfach neu (kein erneuter Permission-Prompt nach einmaliger
+// Freigabe).
+function releaseMic() {
+  if (micStream) {
+    micStream.getTracks().forEach((t) => t.stop());
+    micStream = null;
+  }
+  if (ctx) {
+    ctx.close().catch(() => {});
+    ctx = null;
+  }
+}
+
 function startRec() {
   if (!ctx || !micStream || recording) return;
   recording = true;
@@ -100,6 +117,9 @@ function stopRec() {
   // Noch nicht speichern – erst anhören und bestätigen lassen.
   const blob = new Blob([wav as BlobPart], { type: 'audio/wav' });
   pending = { wav, key: currentKey(), url: URL.createObjectURL(blob) };
+  // Mic & AudioContext freigeben, damit Playback (und ggf. der nächste
+  // Metronom-Vorlauf) wieder über die lauten Lautsprecher laufen.
+  releaseMic();
   render();
 }
 
@@ -312,15 +332,37 @@ function drawRhythm(el: HTMLElement) {
 function playMetronome(onDone: () => void) {
   if (!ctx) return;
   const beat = BEAT_SEC;
+  // Lauter, punchiger Klick: kurzer Rausch-Burst durch ein Bandpass bei freq
+  // (perkussiver Anschlag) + Sinus-Schicht für klare Pitch-Erkennung von
+  // Downbeat (1100 Hz) vs. Off-Beat (880 Hz). Auf iOS reicht ein leiser
+  // Sinus-Klick nicht durch den Lautsprecher, sobald das Mic aktiv ist.
   const click = (t: number, freq: number) => {
+    const sr = ctx!.sampleRate;
+    const nLen = Math.floor(sr * 0.03);
+    const nBuf = ctx!.createBuffer(1, nLen, sr);
+    const nData = nBuf.getChannelData(0);
+    for (let i = 0; i < nLen; i++) nData[i] = Math.random() * 2 - 1;
+    const ns = ctx!.createBufferSource();
+    ns.buffer = nBuf;
+    const bp = ctx!.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = freq;
+    bp.Q.value = 4;
+    const ng = ctx!.createGain();
+    ng.gain.setValueAtTime(0, t);
+    ng.gain.linearRampToValueAtTime(0.9, t + 0.003);
+    ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.10);
+    ns.connect(bp).connect(ng).connect(ctx!.destination);
+    ns.start(t); ns.stop(t + 0.12);
+
     const o = ctx!.createOscillator();
     const g = ctx!.createGain();
     o.frequency.value = freq;
     g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(0.3, t + 0.005);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.04);
+    g.gain.linearRampToValueAtTime(0.5, t + 0.005);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.10);
     o.connect(g).connect(ctx!.destination);
-    o.start(t); o.stop(t + 0.06);
+    o.start(t); o.stop(t + 0.12);
   };
   const t0 = ctx.currentTime + 0.1;
   for (let i = 0; i < 4; i++) click(t0 + i * beat, i === 0 ? 1100 : 880); // Countdown
