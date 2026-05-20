@@ -64,8 +64,11 @@ function currentKey(): string {
 async function ensureMic(): Promise<boolean> {
   if (micStream && ctx) return true;
   try {
+    // Exakt dieselben Constraints wie src/audio/mic.ts – Korpus bildet das ab,
+    // was die App im Live-Betrieb sieht. autoGainControl=true: iOS verstärkt
+    // leises Cello-Spiel automatisch (wie professionelle Tuner-Apps).
     micStream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true },
     });
     ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
     return true;
