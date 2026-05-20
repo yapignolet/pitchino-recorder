@@ -8,10 +8,18 @@
 export const BPM = 60;
 export const BEAT_SEC = 60 / BPM; // 1.0 s pro Viertel
 export const TOLERANCE_SEC = 0.45; // ±450 ms = großzügig für Kinder
-export const ON_RMS_GATE = 0.018; // Ton-an-Schwelle
-export const OFF_RMS_GATE = 0.01; // Ton-aus-Schwelle (Hysterese gegen Flackern)
-export const MIN_HOLD_RATIO = 0.5; // Note muss ≥ 50 % ihrer Notenlänge gehalten werden
-export const MAX_HOLD_EXTRA = 0.6; // … und höchstens so viel länger als vorgesehen
+// Einsatz-Erkennung: relativer Attack (Energieanstieg) mit niedrigem
+// absolutem Boden – empfindlich genug für Bogenton, unabhängig vom
+// absoluten Pegel/Mikrofonabstand (bewährte frühere Logik).
+export const ON_RMS_GATE = 0.015; // absoluter Mindest-Boden für einen Einsatz
+export const ON_RATIO = 1.6; // … und ≥ 60 % lauter als der Vorframe
+export const OFF_RMS_GATE = 0.008; // absoluter Ton-aus-Boden
+export const OFF_PEAK_FRACTION = 0.25; // … oder Abfall unter 25 % des Segment-Peaks
+// Dauer-Bewertung: kurze Werte (Viertel/Achtel) werden détaché gespielt –
+// nur der Einsatz zählt. Erst lange Werte (Halbe/Ganze) müssen spürbar
+// gehalten werden, aber großzügig (Kinder, Bogenwechsel).
+export const LONG_NOTE_MIN_BEATS = 2; // ab Halbe gilt „lange Note"
+export const LONG_HOLD_RATIO = 0.35; // lange Note ≥ 35 % ihrer Notenlänge halten
 export const TAKT_PASS_RATIO = 0.75; // ≥ 75 % korrekte Einsätze → 1 Stern für den Takt
 export const ONSET_POLL_MS = 30; // feste Mess-Taktung der Mic-Schleife
 
@@ -65,24 +73,36 @@ export interface Segment {
 }
 
 /**
- * Inkrementeller Hysterese-Detektor – identische Logik wie die Mic-Loop in der
- * App: Ton-an bei lautem Signal (> ON_RMS_GATE), Ton-aus erst wenn deutlich
- * leiser (< OFF_RMS_GATE). Erfasst sowohl Einsatz als auch gehaltene Länge.
+ * Inkrementeller Ton-Segment-Detektor – identische Logik wie die Mic-Loop in
+ * der App. Einsatz: **relativer Attack** (Energieanstieg ≥ ON_RATIO über dem
+ * Vorframe) bei niedrigem absolutem Boden ON_RMS_GATE → empfindlich für
+ * Bogenton unabhängig von Lautstärke/Mikrofonabstand. Ende: Pegel fällt unter
+ * den absoluten Boden OFF_RMS_GATE **oder** unter OFF_PEAK_FRACTION des bisher
+ * lautesten Frames des Segments (adaptiv, für die Tonlängen-Bewertung).
  */
 export function createSegmentDetector() {
   let soundOn = false;
   let segStart = 0;
+  let segPeak = 0;
+  let prevRms = 0;
   const segments: Segment[] = [];
   return {
     /** Ein Frame: gemessener RMS und zugehöriger Zeitstempel t (Sekunden). */
     push(frameRms: number, t: number): void {
-      if (!soundOn && frameRms > ON_RMS_GATE) {
-        soundOn = true;
-        segStart = t;
-      } else if (soundOn && frameRms < OFF_RMS_GATE) {
-        soundOn = false;
-        segments.push({ start: segStart, end: t });
+      if (!soundOn) {
+        if (frameRms > ON_RMS_GATE && frameRms > prevRms * ON_RATIO) {
+          soundOn = true;
+          segStart = t;
+          segPeak = frameRms;
+        }
+      } else {
+        if (frameRms > segPeak) segPeak = frameRms;
+        if (frameRms < Math.max(OFF_RMS_GATE, segPeak * OFF_PEAK_FRACTION)) {
+          soundOn = false;
+          segments.push({ start: segStart, end: t });
+        }
       }
+      prevRms = frameRms;
     },
     /** Am Ende einen noch klingenden Ton schließen. */
     finalize(t: number): Segment[] {
@@ -116,6 +136,23 @@ export function detectSegments(
   return det.finalize(i / sampleRate);
 }
 
+export interface OnsetMatch {
+  /** Index des zugeordneten Segments oder null (verpasst). */
+  segIdx: number | null;
+  /** Erwarteter Einsatz (s ab Start). */
+  expSec: number;
+  /** Erkannter Einsatz (s) oder null. */
+  gotSec: number | null;
+  /** Erkannt − erwartet (s): − = zu früh, + = zu spät. null wenn verpasst. */
+  deltaSec: number | null;
+  /** Gehaltene Dauer (s) oder null. */
+  heldSec: number | null;
+  /** Vorgesehene Notenlänge (s). */
+  wantSec: number;
+  /** Note gilt als richtig (Einsatz im Fenster UND passend lang gehalten). */
+  ok: boolean;
+}
+
 export interface RhythmScore {
   /** Pro erwarteter Note: Einsatz im Fenster UND passend lang gehalten. */
   results: boolean[];
@@ -123,6 +160,59 @@ export interface RhythmScore {
   ratio: number;
   /** Vergebene Sterne (0 oder 1 – ein Stern pro sauber gespieltem Takt). */
   stars: number;
+  /** Detail-Zuordnung pro Note (für Mess-/Debug-Modus & Offline-Tests). */
+  matches: OnsetMatch[];
+  /** Erkannte Einsätze, die zu keiner Note passen (s ab Start). */
+  falseOnsets: number[];
+}
+
+/**
+ * Ordnet Ton-Segmente den erwarteten Noten zu und liefert Detail-Infos
+ * (Soll/Ist/Delta, gehaltene Dauer, verpasst/falsch) – Basis für Scoring
+ * UND Mess-Modus. Algorithmus identisch zur bisherigen evaluate()-Logik.
+ */
+export function matchOnsets(
+  pattern: Pattern,
+  expectedOnsets: number[],
+  segments: Segment[],
+  tolerance = TOLERANCE_SEC,
+): { matches: OnsetMatch[]; falseOnsets: number[] } {
+  const used = new Set<number>();
+  const matches = expectedOnsets.map<OnsetMatch>((exp, i) => {
+    const wantSec = pattern.notes[i].beats * BEAT_SEC;
+    let bestIdx = -1;
+    let bestDiff = Infinity;
+    segments.forEach((s, si) => {
+      if (!used.has(si) && Math.abs(s.start - exp) < bestDiff) {
+        bestDiff = Math.abs(s.start - exp);
+        bestIdx = si;
+      }
+    });
+    if (bestIdx < 0 || bestDiff > tolerance) {
+      return { segIdx: null, expSec: exp, gotSec: null, deltaSec: null, heldSec: null, wantSec, ok: false };
+    }
+    used.add(bestIdx);
+    const seg = segments[bestIdx];
+    const heldDur = seg.end - seg.start;
+    // Kurze Werte (Viertel/Achtel) werden détaché gespielt → nur Einsatz zählt.
+    // Lange Werte (Halbe/Ganze) müssen spürbar – aber großzügig – gehalten
+    // werden; zu lang ist nie ein Fehler (kein oberes Limit).
+    const isLong = pattern.notes[i].beats >= LONG_NOTE_MIN_BEATS;
+    const heldOk = !isLong || heldDur >= wantSec * LONG_HOLD_RATIO;
+    return {
+      segIdx: bestIdx,
+      expSec: exp,
+      gotSec: seg.start,
+      deltaSec: seg.start - exp,
+      heldSec: heldDur,
+      wantSec,
+      ok: heldOk,
+    };
+  });
+  const falseOnsets = segments
+    .map((s, si) => (used.has(si) ? null : s.start))
+    .filter((x): x is number => x != null);
+  return { matches, falseOnsets };
 }
 
 /** Ein Stern pro Takt, wenn genug Noten sauber gespielt wurden. */
@@ -142,26 +232,9 @@ export function scoreRhythm(
   segments: Segment[],
   tolerance = TOLERANCE_SEC,
 ): RhythmScore {
-  const used = new Set<number>();
-  const results = expectedOnsets.map((exp, i) => {
-    let bestIdx = -1;
-    let bestDiff = Infinity;
-    segments.forEach((s, si) => {
-      if (!used.has(si) && Math.abs(s.start - exp) < bestDiff) {
-        bestDiff = Math.abs(s.start - exp);
-        bestIdx = si;
-      }
-    });
-    if (bestIdx < 0 || bestDiff > tolerance) return false;
-    used.add(bestIdx);
-    const seg = segments[bestIdx];
-    const heldDur = seg.end - seg.start;
-    const wantDur = pattern.notes[i].beats * BEAT_SEC;
-    const longEnough = heldDur >= wantDur * MIN_HOLD_RATIO;
-    const notTooLong = heldDur <= wantDur + MAX_HOLD_EXTRA;
-    return longEnough && notTooLong;
-  });
+  const { matches, falseOnsets } = matchOnsets(pattern, expectedOnsets, segments, tolerance);
+  const results = matches.map((m) => m.ok);
   const total = results.length;
   const ratio = total === 0 ? 0 : results.filter(Boolean).length / total;
-  return { results, ratio, stars: starForRatio(ratio) };
+  return { results, ratio, stars: starForRatio(ratio), matches, falseOnsets };
 }
