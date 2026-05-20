@@ -114,7 +114,14 @@ function stopRec() {
 
   const srcRate = ctx.sampleRate;
   let buf = flatten(chunks);
-  buf = trimSilence(buf, srcRate);
+  // Rhythmus braucht Platz für 4 s Vorzähler + bis ~4 s Pattern + Reserve;
+  // sonst kappt der Trim die letzten Beats. Pitch bleibt beim engen Default.
+  if (mode === 'rhythm') {
+    const maxLen = 4 * BEAT_SEC + patternDurationSec(PATTERNS[rhythmIdx]) + 2;
+    buf = trimSilence(buf, srcRate, maxLen, 1.0);
+  } else {
+    buf = trimSilence(buf, srcRate);
+  }
   const ds = downsample(buf, srcRate, TARGET_SR);
   const wav = encodeWav16(ds, TARGET_SR);
 
@@ -159,8 +166,17 @@ function flatten(parts: Float32Array[]): Float32Array {
 /**
  * Trimmt überschüssige Stille, lässt aber bewusst ~0.7 s Anlauf-Stille stehen –
  * darüber misst das Test-Harness die False-Positive-Rate.
+ *
+ * `maxLenSec` cap-t die Gesamtdauer – wichtig: für Rhythmus muss er
+ * Vorzähler (4 s) + Pattern (bis 4 s) + Reserve abdecken, sonst werden die
+ * letzten Beats abgeschnitten. Für einzelne Töne reicht der Standardwert.
  */
-function trimSilence(buf: Float32Array, sr: number): Float32Array {
+function trimSilence(
+  buf: Float32Array,
+  sr: number,
+  maxLenSec: number = MAX_LEN_SEC,
+  trailSec: number = TRAIL_SILENCE_SEC,
+): Float32Array {
   const win = Math.floor(sr * 0.02);
   const energetic = (i: number) => {
     let s = 0;
@@ -174,8 +190,8 @@ function trimSilence(buf: Float32Array, sr: number): Float32Array {
   while (last > first && !energetic(last)) last -= win;
 
   const start = Math.max(0, first - Math.floor(sr * LEAD_SILENCE_SEC));
-  const end = Math.min(buf.length, last + win + Math.floor(sr * TRAIL_SILENCE_SEC));
-  const maxLen = Math.floor(sr * MAX_LEN_SEC);
+  const end = Math.min(buf.length, last + win + Math.floor(sr * trailSec));
+  const maxLen = Math.floor(sr * maxLenSec);
   const clipped = buf.subarray(start, Math.min(end, start + maxLen));
   return clipped.length ? new Float32Array(clipped) : buf;
 }
