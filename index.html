@@ -31,6 +31,23 @@
       .nav { display: flex; gap: 10px; margin-top: 12px; }
       .nav button { flex: 1; padding: 16px; }
       .hint { color: #94a3b8; font-size: .85rem; margin: 14px 0 0; }
+      .cd-row {
+        display: flex; gap: 10px; justify-content: center; align-items: center;
+        margin: 8px 0 14px;
+      }
+      .cd {
+        width: 38px; height: 38px; border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        background: #334155; color: #94a3b8; font-weight: 800; font-size: 1.05rem;
+        transition: transform 60ms ease-out, background 60ms ease-out, color 60ms ease-out;
+      }
+      .cd.on { background: #fde047; color: #0f172a; transform: scale(1.25); }
+      .cd-pulse {
+        width: 22px; height: 22px; border-radius: 50%;
+        background: #1e293b; border: 2px solid #334155; margin-left: 6px;
+        transition: transform 80ms ease-out, background 80ms ease-out, border-color 80ms ease-out;
+      }
+      .cd-pulse.on { background: #f87171; border-color: #fecaca; transform: scale(1.4); }
       .ver { color: #64748b; font-size: .7rem; text-align: right; margin: 4px 4px 0; font-family: ui-monospace, monospace; }
       #export { background: #0d9488; }
     </style>

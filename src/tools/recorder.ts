@@ -9,7 +9,7 @@
  */
 import { Vex } from 'vexflow';
 import { ALL_NOTES, germanName } from '../music/notes';
-import { PATTERNS, patternDurationSec, BEAT_SEC } from '../audio/rhythmScore';
+import { PATTERNS, patternDurationSec, computeOnsets, BEAT_SEC } from '../audio/rhythmScore';
 
 // Build-Version (Git-SHA + Datum). Wird von Vite via `define` injiziert
 // (vite.config.ts) – damit Tester und wir vom selben Build sprechen.
@@ -311,7 +311,7 @@ function drawPitch(el: HTMLElement) {
   v.draw(c, stave);
 }
 
-function drawRhythm(el: HTMLElement) {
+function drawRhythm(el: HTMLElement, hiIdx = -1) {
   el.innerHTML = '';
   const { Renderer, Stave, StaveNote, Voice, Formatter, Beam } = Vex.Flow;
   const W = el.clientWidth || 320;
@@ -322,7 +322,12 @@ function drawRhythm(el: HTMLElement) {
   stave.addClef('bass').addTimeSignature('4/4');
   stave.setContext(c).draw();
   const pat = PATTERNS[rhythmIdx];
-  const sn = pat.notes.map((b) => new StaveNote({ clef: 'bass', keys: ['b/3'], duration: b.vex }));
+  const sn = pat.notes.map((b, i) => {
+    const note = new StaveNote({ clef: 'bass', keys: ['b/3'], duration: b.vex });
+    if (i < hiIdx) note.setStyle({ fillStyle: '#34d399', strokeStyle: '#34d399' });
+    else if (i === hiIdx) note.setStyle({ fillStyle: '#fde047', strokeStyle: '#fde047' });
+    return note;
+  });
   const v = new Voice({ num_beats: 4, beat_value: 4 });
   v.setStrict(false); v.addTickables(sn);
   const beams = Beam.generateBeams(sn.filter((n) => n.getDuration() === '8'));
@@ -369,9 +374,52 @@ function playMetronome(onDone: () => void) {
     o.start(t); o.stop(t + 0.12);
   };
   const t0 = ctx.currentTime + 0.1;
-  for (let i = 0; i < 4; i++) click(t0 + i * beat, i === 0 ? 1100 : 880); // Countdown
-  const dur = patternDurationSec(PATTERNS[rhythmIdx]);
-  for (let i = 0; i < Math.ceil(dur / beat); i++) click(t0 + 4 * beat + i * beat, 880);
+  const msFromNow = (t: number) => Math.max(0, (t - ctx!.currentTime) * 1000);
+
+  // Optische Signale: Countdown-Dots (1–4) und Pattern-Beat-Highlight im
+  // Notensystem. Wichtig auf iPad/iPhone, weil das Metronom während der
+  // Aufnahme durch das iOS-Routing leiser wird – visuell ist es immer da.
+  const flashDot = (idx: number) => {
+    const d = document.querySelector(`.cd-${idx}`);
+    if (!d) return;
+    d.classList.add('on');
+    setTimeout(() => d.classList.remove('on'), 200);
+  };
+  const flashPulse = () => {
+    const p = document.getElementById('beat-pulse');
+    if (!p) return;
+    p.classList.add('on');
+    setTimeout(() => p.classList.remove('on'), 180);
+  };
+  const highlightNote = (idx: number) => {
+    const vf = document.getElementById('vf');
+    if (vf) drawRhythm(vf, idx);
+  };
+
+  // 4 Countdown-Klicks + leuchtende Dots
+  for (let i = 0; i < 4; i++) {
+    const t = t0 + i * beat;
+    click(t, i === 0 ? 1100 : 880);
+    setTimeout(() => flashDot(i), msFromNow(t));
+  }
+
+  // Pattern-Phase: Metronom-Klicks auf jeder Viertel + Puls; Noten-
+  // Hervorhebung an den tatsächlichen Einsätzen des Patterns.
+  const pat = PATTERNS[rhythmIdx];
+  const onsets = computeOnsets(pat);
+  const dur = patternDurationSec(pat);
+  const tPatStart = t0 + 4 * beat;
+  for (let i = 0; i < Math.ceil(dur / beat); i++) {
+    const t = tPatStart + i * beat;
+    click(t, 880);
+    setTimeout(flashPulse, msFromNow(t));
+  }
+  onsets.forEach((sec, i) => {
+    setTimeout(() => highlightNote(i), msFromNow(tPatStart + sec));
+  });
+  // Hervorhebung am Ende zurücksetzen.
+  setTimeout(() => highlightNote(-1), (4 * beat + dur + 0.05) * 1000);
+
   setTimeout(onDone, (4 * beat + dur + 0.2) * 1000);
 }
 
@@ -426,6 +474,14 @@ function render() {
         ${variants.map((v, i) => `<button class="vr ${i === variantIdx ? 'on' : ''}" data-v="${i}">${v}</button>`).join('')}
       </div>
       <div class="takes">Takes für diese Variante: <b>${done}</b></div>
+      ${mode === 'rhythm' && recording ? `
+        <div class="cd-row">
+          <span class="cd cd-0">1</span>
+          <span class="cd cd-1">2</span>
+          <span class="cd cd-2">3</span>
+          <span class="cd cd-3">4</span>
+          <span class="cd-pulse" id="beat-pulse"></span>
+        </div>` : ''}
       <button class="rec ${recording ? 'recording' : ''}" id="rec">
         ${recording ? '⏹ Stop' : (mode === 'pitch' ? '● Aufnehmen' : '● Mit Metronom aufnehmen')}
       </button>
