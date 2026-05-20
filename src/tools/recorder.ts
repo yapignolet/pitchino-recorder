@@ -11,6 +11,10 @@ import { Vex } from 'vexflow';
 import { ALL_NOTES, germanName } from '../music/notes';
 import { PATTERNS, patternDurationSec, BEAT_SEC } from '../audio/rhythmScore';
 
+// Build-Version (Git-SHA + Datum). Wird von Vite via `define` injiziert
+// (vite.config.ts) – damit Tester und wir vom selben Build sprechen.
+declare const __BUILD_VERSION__: string;
+
 const TARGET_SR = 16000; // gleiches Ziel wie pitch.ts
 const LEAD_SILENCE_SEC = 0.7; // bewusst erhalten: Harness misst hier False-Positives
 const TRAIL_SILENCE_SEC = 0.3;
@@ -397,6 +401,7 @@ function render() {
           <button id="save" style="background:#16a34a">✅ Speichern</button>
         </div>
         <p class="hint">Verworfene Aufnahmen verbrauchen keine Take-Nummer.</p>
+        <div class="ver">Build ${__BUILD_VERSION__}</div>
       </div>`;
     const $p = (id: string) => document.getElementById(id)!;
     (mode === 'pitch' ? drawPitch : drawRhythm)(document.getElementById('vf')!);
@@ -412,6 +417,7 @@ function render() {
       <span class="spacer"></span>
       <button id="export">⬇︎ ZIP (${recordings.length})</button>
     </div>
+    <div class="ver">Build ${__BUILD_VERSION__}</div>
     <div class="card">
       <div class="idx">${idx + 1} / ${total}</div>
       <div id="vf"></div>
