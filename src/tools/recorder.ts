@@ -464,8 +464,9 @@ function render() {
         <div id="vf"></div>
         <div class="title">${title}</div>
         <p class="hint">Aufnahme anhören und entscheiden:</p>
-        <audio id="review" src="${pending.url}" controls autoplay
-               style="width:100%;margin:6px 0 14px"></audio>
+        <button id="review-play" style="width:100%;padding:26px 20px;font-size:1.6rem;font-weight:800;background:#0f172a;border:3px solid #334155;border-radius:14px;color:#f1f5f9;margin:8px 0 14px;cursor:pointer">
+          ▶ Abspielen
+        </button>
         <div class="nav">
           <button id="discard" style="background:#dc2626">🗑 Verwerfen</button>
           <button id="save" style="background:#16a34a">✅ Speichern</button>
@@ -475,8 +476,19 @@ function render() {
       </div>`;
     const $p = (id: string) => document.getElementById(id)!;
     (mode === 'pitch' ? drawPitch : drawRhythm)(document.getElementById('vf')!);
-    $p('discard').onclick = discardPending;
-    $p('save').onclick = savePending;
+
+    // Großer Play/Pause-Button statt nativer <audio controls>.
+    const audio = new Audio(pending.url);
+    audio.autoplay = true;
+    const playBtn = $p('review-play') as HTMLButtonElement;
+    const setLabel = () => { playBtn.textContent = audio.paused ? '▶ Abspielen' : '⏸ Pause'; };
+    audio.addEventListener('play', setLabel);
+    audio.addEventListener('pause', setLabel);
+    audio.addEventListener('ended', setLabel);
+    playBtn.onclick = () => { audio.paused ? audio.play() : audio.pause(); };
+
+    $p('discard').onclick = () => { audio.pause(); discardPending(); };
+    $p('save').onclick = () => { audio.pause(); savePending(); };
     return;
   }
 
