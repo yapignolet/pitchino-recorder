@@ -477,18 +477,33 @@ function render() {
     const $p = (id: string) => document.getElementById(id)!;
     (mode === 'pitch' ? drawPitch : drawRhythm)(document.getElementById('vf')!);
 
-    // Großer Play/Pause-Button statt nativer <audio controls>.
-    const audio = new Audio(pending.url);
-    audio.autoplay = true;
+    // DOM-Audio-Element statt new Audio(): iOS Safari spielt über den
+    // Hauptlautsprecher (nicht den Earpiece), wenn das Element im DOM ist
+    // und playsinline gesetzt ist.
+    const audio = document.createElement('audio');
+    audio.src = pending.url;
+    audio.setAttribute('playsinline', 'true');
+    document.body.appendChild(audio);
+
     const playBtn = $p('review-play') as HTMLButtonElement;
     const setLabel = () => { playBtn.textContent = audio.paused ? '▶ Abspielen' : '⏸ Pause'; };
     audio.addEventListener('play', setLabel);
     audio.addEventListener('pause', setLabel);
     audio.addEventListener('ended', setLabel);
-    playBtn.onclick = () => { audio.paused ? audio.play() : audio.pause(); };
+    playBtn.onclick = () => {
+      if (audio.paused) {
+        audio.play().catch(err => {
+          console.error('[recorder] playback failed:', err);
+          playBtn.textContent = '⚠️ Nochmal tippen';
+        });
+      } else {
+        audio.pause();
+      }
+    };
 
-    $p('discard').onclick = () => { audio.pause(); discardPending(); };
-    $p('save').onclick = () => { audio.pause(); savePending(); };
+    const cleanup = () => { audio.pause(); document.body.removeChild(audio); };
+    $p('discard').onclick = () => { cleanup(); discardPending(); };
+    $p('save').onclick = () => { cleanup(); savePending(); };
     return;
   }
 
